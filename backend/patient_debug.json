@@ -1,0 +1,11 @@
+{
+  "_id": "69b8475928244e13d9ed8b78",
+  "userId": "69ad592810534487af533098",
+  "age": 30,
+  "gender": "Male",
+  "emergencyContactName": "Test",
+  "emergencyContactPhone": "1234567890",
+  "createdAt": "2026-03-16T18:09:29.858Z",
+  "updatedAt": "2026-03-16T18:09:29.858Z",
+  "__v": 0
+}
