@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
+import { AuthContext } from '../context/AuthContext';
+import io from 'socket.io-client';
 import { Line } from 'react-chartjs-2';
 import {
     Chart as ChartJS,
@@ -13,47 +15,70 @@ import {
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
 
+const SOCKET_URL = 'http://localhost:5000';
+
 const MyStats = () => {
+    const { user } = useContext(AuthContext);
     const [vitals, setVitals] = useState({ hr: 0, spo2: 0, temp: 0 });
     const [history, setHistory] = useState({ hr: [], spo2: [], temp: [], labels: [] });
+    const [isConnected, setIsConnected] = useState(false);
+    const [source, setSource] = useState('unknown');
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const response = await fetch('http://127.0.0.1:5000/data');
-                const data = await response.json();
-                console.log(data)
+        const socket = io(SOCKET_URL, { transports: ['websocket'] });
 
-                setVitals({
-                    hr: data.hr ?? 0,
-                    spo2: data.spo2 ?? 0,
-                    temp: data.temp ?? 0
-                });
+        socket.on('connect', () => {
+            setIsConnected(true);
+            if (user) socket.emit('join_room', user._id);
+            console.log("✅ WebSocket Connected: Real-time monitoring active.");
+        });
 
-                if (data.hr !== null) {
-                    setHistory(prev => ({
-                        hr: [...prev.hr, data.hr].slice(-40),
-                        spo2: [...prev.spo2, data.spo2].slice(-40),
-                        temp: [...prev.temp, data.temp].slice(-40),
-                        labels: [...prev.labels, ""].slice(-40),
-                    }));
-                }
-            } catch (err) {
-                console.error("Fetch error:", err);
-            }
+        socket.on('disconnect', () => {
+            setIsConnected(false);
+        });
+
+        socket.on('global_stream_data', (data) => {
+            setSource(data.source || 'hardware');
+            
+            // VERIFICATION LOG: Match this with your serialBridge.js output!
+            console.log(`[${data.source?.toUpperCase() || 'DATA'}] HR:${data.hr} | SpO2:${data.spo2}% | Temp:${data.temp}°C`);
+            
+            setVitals({
+                hr: data.hr ?? 0,
+                spo2: data.spo2 ?? 0,
+                temp: data.temp ?? 0
+            });
+
+            setHistory(prev => {
+                const newLabels = [...prev.labels, new Date(data.timestamp || Date.now()).toLocaleTimeString()].slice(-40);
+                return {
+                    hr: [...prev.hr, data.hr].slice(-40),
+                    spo2: [...prev.spo2, data.spo2].slice(-40),
+                    temp: [...prev.temp, data.temp].slice(-40),
+                    labels: newLabels,
+                };
+            });
+        });
+
+        return () => {
+            socket.disconnect();
         };
+    }, [user]);
 
-        const timer = setInterval(fetchData, 1000);
-        return () => clearInterval(timer);
-    }, []);
-
-    const commonOptions = {
+    const createOptions = (min, suggestMax) => ({
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
-        scales: { x: { display: false }, y: { ticks: { color: "#94a3b8" } } },
+        scales: { 
+            x: { display: false }, 
+            y: { 
+                ticks: { color: "#94a3b8" },
+                min: min,
+                suggestedMax: suggestMax 
+            } 
+        },
         plugins: { legend: { display: false } }
-    };
+    });
 
     const getChartData = (label, dataPoints, color) => ({
         labels: history.labels,
@@ -70,8 +95,21 @@ const MyStats = () => {
     return (
         <div style={styles.container}>
             <header style={styles.header}>
-                <h1>ESP Fitness Dashboard</h1>
-                <span style={styles.badge}>Band Connected</span>
+                <div>
+                    <h1>Health History Dashboard</h1>
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '5px' }}>
+                        <span style={{ ...styles.badge, backgroundColor: isConnected ? '#064e3b' : '#7f1d1d', color: isConnected ? '#34d399' : '#fca5a5' }}>
+                            {isConnected ? '📡 CONNECTED' : '⚠️ OFFLINE'}
+                        </span>
+                        <span style={{ 
+                            ...styles.badge, 
+                            backgroundColor: source === 'hardware' ? '#1e3a8a' : '#7c2d12', 
+                            color: source === 'hardware' ? '#bfdbfe' : '#fed7aa' 
+                        }}>
+                             MODE: {source?.toUpperCase() || 'SEARCHING...'}
+                        </span>
+                    </div>
+                </div>
             </header>
 
             <div style={styles.statsGrid}>
@@ -84,19 +122,19 @@ const MyStats = () => {
                 <div style={styles.chartCard}>
                     <p style={styles.chartTitle}>Heart Rate History</p>
                     <div style={styles.chartWrap}>
-                        <Line options={commonOptions} data={getChartData('HR', history.hr, '#ef4444')} />
+                        <Line options={createOptions(40, 160)} data={getChartData('HR', history.hr, '#ef4444')} />
                     </div>
                 </div>
                 <div style={styles.chartCard}>
                     <p style={styles.chartTitle}>SpO2 History</p>
                     <div style={styles.chartWrap}>
-                        <Line options={commonOptions} data={getChartData('SpO2', history.spo2, '#22c55e')} />
+                        <Line options={createOptions(80, 100)} data={getChartData('SpO2', history.spo2, '#22c55e')} />
                     </div>
                 </div>
                 <div style={styles.chartCard}>
                     <p style={styles.chartTitle}>Temperature History</p>
                     <div style={styles.chartWrap}>
-                        <Line options={commonOptions} data={getChartData('Temp', history.temp, '#f59e0b')} />
+                        <Line options={createOptions(35, 40)} data={getChartData('Temp', history.temp, '#f59e0b')} />
                     </div>
                 </div>
             </div>
@@ -114,7 +152,7 @@ const StatCard = ({ value, label, color }) => (
 const styles = {
     container: { backgroundColor: '#020617', color: '#e5e7eb', minHeight: '100vh', padding: '20px', fontFamily: 'sans-serif' },
     header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' },
-    badge: { backgroundColor: '#064e3b', color: '#34d399', padding: '5px 15px', borderRadius: '20px', fontSize: '0.8rem' },
+    badge: { padding: '5px 15px', borderRadius: '20px', fontSize: '0.8rem', fontWeight: 'bold', transition: '0.3s' },
     statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' },
     statCard: { backgroundColor: '#0f172a', padding: '20px', borderRadius: '12px' },
     statValue: { fontSize: '2.5rem', margin: '0 0 5px 0' },

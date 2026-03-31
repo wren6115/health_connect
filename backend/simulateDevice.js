@@ -64,20 +64,23 @@ const generateData = () => {
     return {
         hr: currentHeartRate,
         spo2: currentSpo2,
-        temp: parseFloat(currentTemperature.toFixed(1))
+        temp: parseFloat(currentTemperature.toFixed(1)),
+        source: "simulated"
     };
 };
 
+let patientIds = [];
+
 const sendData = async () => {
     const data = generateData();
-    console.log(`[${new Date().toLocaleTimeString()}] Sending: HR=${data.hr}, SpO2=${data.spo2}%, Temp=${data.temp}°C`);
+    console.log(`[${new Date().toLocaleTimeString()}] Generating: HR=${data.hr}, SpO2=${data.spo2}%, Temp=${data.temp}°C`);
 
-    try {
-        await axios.post(`${API_URL}/${TEST_PATIENT_USER_ID}`, data);
-    } catch (error) {
-        console.error('Error sending data:', error.message);
-        if (error.response) {
-            console.error('Server response:', error.response.data);
+    for (const pid of patientIds) {
+        try {
+            await axios.post(`${API_URL}/${pid}`, data);
+            // console.log(` -> Sent to Patient ${pid}`);
+        } catch (error) {
+            console.error(`Error sending to ${pid}:`, error.message);
         }
     }
 };
@@ -85,24 +88,27 @@ const sendData = async () => {
 // --- Main Startup ---
 const startSimulation = async () => {
     if (!TEST_PATIENT_USER_ID) {
-        console.log('No ID provided via args. Auto-fetching a patient from DB...');
+        console.log('No ID provided via args. Auto-fetching all patients from DB...');
         await mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/healthconnect');
         const Patient = require('./models/Patient');
-        const p = await Patient.findOne();
-        if (p) {
-            TEST_PATIENT_USER_ID = p.userId.toString();
-            console.log(`Auto-selected Patient User ID: ${TEST_PATIENT_USER_ID}`);
+        const patients = await Patient.find();
+        
+        if (patients.length > 0) {
+            patientIds = patients.map(p => p.userId.toString());
+            console.log(`Auto-selected Patient User IDs: \n - ${patientIds.join('\n - ')}`);
         } else {
             console.error('No patients found in DB. Please register one first.');
             process.exit(1);
         }
         await mongoose.disconnect();
+    } else {
+        patientIds = [TEST_PATIENT_USER_ID];
     }
 
-    console.log(`Starting device simulation targeting: ${API_URL}/${TEST_PATIENT_USER_ID}`);
+    console.log(`Starting device simulation targeting: ${API_URL}/[patientId]`);
     console.log('Press Ctrl+C to stop.');
 
-    setInterval(sendData, 3000);
+    setInterval(sendData, 1000);
     sendData();
 }
 

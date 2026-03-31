@@ -12,7 +12,7 @@ const { checkAbnormalities } = require('../services/alertService');
 router.post('/device-data/:patientUserId', async (req, res) => {
     try {
         const { patientUserId } = req.params;
-        const { hr, spo2, temp, bpSystolic, bpDiastolic } = req.body;
+        const { hr, spo2, temp, bpSystolic, bpDiastolic, source } = req.body;
 
         // --- Basic data validation ---
         if (hr == null || spo2 == null || temp == null) {
@@ -67,15 +67,20 @@ router.post('/device-data/:patientUserId', async (req, res) => {
                 bpSystolic: bpSystolic ?? null,
                 bpDiastolic: bpDiastolic ?? null,
                 timestamp: reading.timestamp,
-                readingId: reading._id
+                readingId: reading._id,
+                source: source || "unknown"
             };
 
-            // Send to the patient's own room
+            // Send to the patient's own room (Private stream)
             io.to(patientUserId.toString()).emit('live_health_data', dataPayload);
-            // Send to all doctors/admins monitoring dashboard
+            
+            // Send to monitor dashboard (Professional stream)
             io.to('admin_and_doctors').emit('live_health_data', dataPayload);
 
-            // Check thresholds and fire alerts + feedback_request if needed
+            // Trigger global update with exact matching data
+            io.emit('global_stream_data', dataPayload);
+
+            // Check thresholds and fire alerts + feedback_request backend-side
             await checkAbnormalities(patientUserId, { hr: hrNum, spo2: spo2Num, temp: tempNum, bpSystolic, bpDiastolic }, io);
         }
 
@@ -83,6 +88,34 @@ router.post('/device-data/:patientUserId', async (req, res) => {
     } catch (error) {
         console.error('Device Data POST Error:', error);
         res.status(500).json({ success: false, message: 'Server error processing device data.' });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/device/alert-response
+// Frontend sends patient response (isOkay=true/false) to stop countdown
+// ---------------------------------------------------------------------------
+router.post('/alert-response', async (req, res) => {
+    try {
+        const { alertId, isOkay } = req.body;
+        if (!alertId) {
+            return res.status(400).json({ success: false, message: 'alertId is required.' });
+        }
+
+        // Import resolveAlert here to avoid circular dependencies if any
+        const { resolveAlert } = require('../services/alertService');
+        const io = req.app.get('io');
+        
+        const handled = await resolveAlert(alertId, isOkay, io);
+        
+        if (handled) {
+            return res.status(200).json({ success: true, message: 'Alert response registered successfully.' });
+        } else {
+            return res.status(404).json({ success: false, message: 'Alert response window expired or alert not found.' });
+        }
+    } catch (error) {
+        console.error('Alert Response Error:', error);
+        res.status(500).json({ success: false, message: 'Server error processing alert response.' });
     }
 });
 

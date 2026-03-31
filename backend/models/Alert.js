@@ -16,17 +16,10 @@ const alertSchema = new mongoose.Schema({
         enum: ['info', 'warning', 'critical'],
         default: 'warning'
     },
-    feedbackRequested: {
-        type: Boolean,
-        default: false
-    },
-    feedbackReceived: {
-        type: Boolean,
-        default: false
-    },
-    escalatedToDoctor: {
-        type: Boolean,
-        default: false
+    status: {
+        type: String,
+        enum: ['NORMAL', 'WAITING_FOR_RESPONSE', 'RESOLVED', 'ESCALATED'],
+        default: 'WAITING_FOR_RESPONSE'
     },
     value: {
         type: Number,

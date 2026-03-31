@@ -51,7 +51,7 @@ const connectToDevice = async () => {
         if (!arduinoPortInfo) {
             process.stdout.write('\r⏳ Scanning for IoT devices on USB ports...       ');
             isConnecting = false;
-            setTimeout(connectToDevice, 3000);
+            setTimeout(connectToDevice, 2000);
             return;
         }
 
@@ -76,18 +76,26 @@ const connectToDevice = async () => {
                 // 3. Strict JSON Parsing 
                 const vitals = JSON.parse(cleanData);
                 
-                // 4. Client-side sanity validation
-                if (vitals.hr < 40 || vitals.hr > 200) throw new Error(`Invalid HR: ${vitals.hr}`);
-                if (vitals.spo2 < 50 || vitals.spo2 > 100) throw new Error(`Invalid SpO2: ${vitals.spo2}`);
-                if (vitals.temp < 30 || vitals.temp > 45) throw new Error(`Invalid Temp: ${vitals.temp}`);
+                // Use the heartRate key as per the high-accuracy standard
+                const hr = vitals.heartRate || vitals.hr || 0;
+                const spo2 = vitals.spo2 || 0;
+                const temp = vitals.temp || 0;
 
-                console.log(`📡 Stream OK -> HR:${vitals.hr} | SpO2:${vitals.spo2}% | Temp:${vitals.temp}°C`);
+                // 4. Client-side sanity validation
+                if (hr < 40 || hr > 200) throw new Error(`Invalid HR: ${hr}`);
+                if (spo2 < 50 || spo2 > 100) throw new Error(`Invalid SpO2: ${spo2}`);
+                if (temp < 30 || temp > 45) throw new Error(`Invalid Temp: ${temp}`);
+
+                // Log the exact status for manual verification
+                console.log(`[${new Date().toLocaleTimeString()}] 📡 IoT -> Dashboard: HR:${hr} | SpO2:${spo2}% | Temp:${temp}°C`);
                 
                 // 5. Send to Server Pipeline
                 await axios.post(`${API_URL}/${patientUserId}`, {
-                    hr: vitals.hr,
-                    spo2: vitals.spo2,
-                    temp: vitals.temp
+                    hr: hr,
+                    spo2: spo2,
+                    temp: temp,
+                    timestamp: vitals.timestamp || Date.now(),
+                    source: "hardware" // Explicitly tag as hardware
                 });
                 
             } catch (err) {
@@ -101,20 +109,20 @@ const connectToDevice = async () => {
             port = null;
             isConnecting = false;
             // Enter auto-reconnect loop
-            setTimeout(connectToDevice, 3000);
+            setTimeout(connectToDevice, 2000);
         });
 
         port.on('error', (err) => {
             console.error('\n⚠️ Serial Port Error:', err.message);
             port = null;
             isConnecting = false;
-            setTimeout(connectToDevice, 3000);
+            setTimeout(connectToDevice, 2000);
         });
 
     } catch (err) {
         console.error('Connection Exception:', err.message);
         isConnecting = false;
-        setTimeout(connectToDevice, 3000);
+        setTimeout(connectToDevice, 2000);
     }
 };
 

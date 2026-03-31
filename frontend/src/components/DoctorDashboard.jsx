@@ -23,8 +23,12 @@ const DoctorDashboard = () => {
         const socket = io(SOCKET_URL, { transports: ['websocket'] });
         socket.emit('join_room', 'admin_and_doctors');
 
-        socket.on('new_alert', (payload) => {
-            setAlerts(prev => [{ ...payload.alert, patientName: payload.patientName, time: new Date() }, ...prev.slice(0, 19)]);
+        socket.on('escalated_alert', (payload) => {
+            setAlerts(prev => [{ 
+                ...payload, 
+                type: 'Escalation',
+                time: new Date() 
+            }, ...prev.slice(0, 19)]);
         });
 
         socket.on('sos_triggered', (payload) => {

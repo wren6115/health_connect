@@ -60,41 +60,6 @@ const PatientDashboard = () => {
         return () => clearTimeout(t);
     }, [sosActive]);
 
-    useEffect(() => {
-        if (!user) { navigate('/login'); return; }
-
-        const socket = io(SOCKET_URL, { transports: ['websocket'] });
-
-        // Join the patient's personal room so they receive their own alerts
-        socket.emit('join_room', user._id);
-
-        // Live vitals stream
-        socket.on('live_health_data', (data) => {
-            if (data.patientUserId === user._id) {
-                setVitals({ hr: data.hr, spo2: data.spo2, temp: data.temp });
-            }
-        });
-
-        // SOS / abnormality alerts
-        socket.on('new_alert', (payload) => {
-            if (payload.patientId === user._id) {
-                const condition = payload.alert;
-                // Flash the SOS banner (replace if another just fired)
-                setSosActive({
-                    message: condition.message,
-                    severity: condition.severity,
-                });
-                // Prepend to alert history
-                setAlerts(prev => [
-                    { ...condition, time: new Date() },
-                    ...prev.slice(0, 19),          // keep last 20
-                ]);
-            }
-        });
-
-        return () => socket.disconnect();
-    }, [user, navigate]);
-
     // Manual SOS button handler
     const handleManualSOS = useCallback(async () => {
         setSosLoading(true);
@@ -109,6 +74,63 @@ const PatientDashboard = () => {
         }
     }, []);
 
+    // --- Feedback / Escalation Loop ---
+    const [feedbackAlert, setFeedbackAlert] = useState(null);
+    const [countdown, setCountdown] = useState(15);
+
+    useEffect(() => {
+        let timer;
+        if (feedbackAlert && countdown > 0) {
+            timer = setInterval(() => setCountdown(c => c - 1), 1000);
+        } else if (feedbackAlert && countdown <= 0) {
+            setFeedbackAlert(null);
+            setSosActive({
+                message: "No response within 15 seconds. Emergency SOS Dispatched!",
+                severity: "critical"
+            });
+        }
+        return () => clearInterval(timer);
+    }, [feedbackAlert, countdown]);
+
+    useEffect(() => {
+        if (!user) return;
+        const socket = io(SOCKET_URL, { transports: ['websocket'] });
+        socket.emit('join_room', user._id);
+
+        // REAL-TIME Vitals - Using global stream for exact device matching
+        socket.on('global_stream_data', (data) => {
+            setVitals({ hr: data.hr, spo2: data.spo2, temp: data.temp });
+        });
+
+        // Feedback / Alert hooks remain on targetted private room
+        socket.on('feedback_request', (payload) => {
+            setFeedbackAlert(payload);
+            setCountdown(15);
+        });
+
+        return () => socket.disconnect();
+    }, [user]);
+
+    const handleFeedbackResponse = async (isOkay) => {
+        if (!feedbackAlert) return;
+        const currentAlertId = feedbackAlert.alertId;
+        setFeedbackAlert(null);
+        try {
+            await api.post('/device/alert-response', {
+                alertId: currentAlertId,
+                isOkay
+            });
+            if (!isOkay) {
+                setSosActive({
+                    message: "Emergency SOS Triggered! Help is on the way.",
+                    severity: "critical"
+                });
+            }
+        } catch (error) {
+            console.error("Failed to send alert response", error);
+        }
+    };
+
     return (
         <div className="min-h-screen" style={{ background: 'linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%)' }}>
 
@@ -120,6 +142,40 @@ const PatientDashboard = () => {
                         <span className="text-2xl">🚨</span>
                         <p className="font-bold text-lg">{sosActive.message}</p>
                         <button onClick={() => setSosActive(null)} className="ml-auto text-white/70 hover:text-white text-xl">✕</button>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Feedback / Escalation Modal ─────────────────────────────── */}
+            {feedbackAlert && (
+                <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl border-4 flex flex-col items-center text-center
+                        transform transition-all animate-pulse border-red-500">
+                        <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-5xl mb-4">
+                            🚨
+                        </div>
+                        <h2 className="text-3xl font-black text-gray-900 mb-2">ARE YOU OKAY?</h2>
+                        <p className="text-red-600 font-bold mb-4">{feedbackAlert.message}</p>
+                        
+                        <div className="bg-gray-100 w-full rounded-2xl p-4 mb-6">
+                            <p className="text-sm text-gray-600 mb-2 font-medium">Automatic Emergency Escalation in:</p>
+                            <div className="text-5xl font-black text-red-600 tracking-tighter shadow-sm">{countdown}s</div>
+                        </div>
+
+                        <div className="flex flex-col gap-3 w-full">
+                            <button 
+                                onClick={() => handleFeedbackResponse(true)}
+                                className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-4 rounded-xl text-xl shadow-lg transition-transform active:scale-95"
+                            >
+                                ✅ YES, I AM OKAY
+                            </button>
+                            <button 
+                                onClick={() => handleFeedbackResponse(false)}
+                                className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded-xl text-xl shadow-lg transition-transform active:scale-95"
+                            >
+                                🚑 NO, I NEED HELP NOW
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
