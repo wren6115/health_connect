@@ -11,6 +11,9 @@ dotenv.config();
 const connectDB = require('./config/db');
 connectDB();
 
+// Import report generation service
+const { startReportGenerationService } = require('./services/reportGenerationService');
+
 // Import routes
 const doctorRoutes = require('./routes/doctors');
 const appointmentRoutes = require('./routes/appointments');
@@ -26,6 +29,7 @@ const notificationRoutes = require('./routes/notifications');
 const transactionRoutes = require('./routes/transactions');
 const sosRoutes = require('./routes/sos');
 const feedbackRoutes = require('./routes/feedback');
+const reportRoutes = require('./routes/reports');
 
 // Initialize express app
 const app = express();
@@ -43,16 +47,16 @@ const io = new Server(server, {
 app.set('io', io);
 
 io.on('connection', (socket) => {
-    console.log('A client connected:', socket.id);
+    console.log('🟢 A client connected:', socket.id);
 
     // Allow clients to join rooms (like a 'doctor_123' room or 'patient_456' room)
     socket.on('join_room', (room) => {
         socket.join(room);
-        console.log(`Socket ${socket.id} joined room ${room}`);
+        console.log(`📍 Socket ${socket.id} joined room ${room}`);
     });
 
     socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
+        console.log('🔴 Client disconnected:', socket.id);
     });
 });
 
@@ -94,6 +98,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/sos', sosRoutes);
 app.use('/api/feedback', feedbackRoutes);
+app.use('/api/reports', reportRoutes);
 
 // --- Backward Compatibility for Frontend MyStats.jsx ---
 // The frontend polls GET /data without auth/patientId. 
@@ -158,6 +163,9 @@ server.listen(PORT, () => {
 ║                                                       ║
 ╚═══════════════════════════════════════════════════════╝
   `);
+
+    // Start automatic report generation service
+    startReportGenerationService(io);
 });
 
 module.exports = { app, server };

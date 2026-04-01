@@ -94,21 +94,43 @@ const PatientDashboard = () => {
 
     useEffect(() => {
         if (!user) return;
-        const socket = io(SOCKET_URL, { transports: ['websocket'] });
-        socket.emit('join_room', user._id);
+        
+        console.log(`🔌 PatientDashboard connecting to Socket.io at ${SOCKET_URL}`);
+        const socket = io(SOCKET_URL, { 
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            reconnectionAttempts: 5
+        });
+        
+        socket.on('connect', () => {
+            console.log('✅ Socket.io Connected for PatientDashboard - ID:', socket.id);
+            socket.emit('join_room', user._id);
+            console.log(`📍 PatientDashboard joined room: ${user._id}`);
+        });
+
+        socket.on('connect_error', (error) => {
+            console.error('🔴 Patient Dashboard Connection Error:', error);
+        });
 
         // REAL-TIME Vitals - Using global stream for exact device matching
         socket.on('global_stream_data', (data) => {
+            console.log('[✅ PatientDashboard RECEIVED global_stream_data]', data);
             setVitals({ hr: data.hr, spo2: data.spo2, temp: data.temp });
         });
 
         // Feedback / Alert hooks remain on targetted private room
         socket.on('feedback_request', (payload) => {
+            console.log('[🚨 PatientDashboard RECEIVED feedback_request]', payload);
             setFeedbackAlert(payload);
             setCountdown(15);
         });
 
-        return () => socket.disconnect();
+        return () => {
+            console.log('🔌 PatientDashboard cleaning up Socket.io connection');
+            socket.disconnect();
+        };
     }, [user]);
 
     const handleFeedbackResponse = async (isOkay) => {

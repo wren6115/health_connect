@@ -68,17 +68,22 @@ router.post('/device-data/:patientUserId', async (req, res) => {
                 bpDiastolic: bpDiastolic ?? null,
                 timestamp: reading.timestamp,
                 readingId: reading._id,
-                source: source || "unknown"
+                source: source || "hardware"
             };
+
+            console.log(`📡 [BROADCAST] Real-time data for patient ${patientUserId}:`, dataPayload);
 
             // Send to the patient's own room (Private stream)
             io.to(patientUserId.toString()).emit('live_health_data', dataPayload);
+            console.log(`✅ Sent 'live_health_data' to room: ${patientUserId.toString()}`);
             
             // Send to monitor dashboard (Professional stream)
             io.to('admin_and_doctors').emit('live_health_data', dataPayload);
+            console.log(`✅ Sent 'live_health_data' to room: admin_and_doctors`);
 
             // Trigger global update with exact matching data
             io.emit('global_stream_data', dataPayload);
+            console.log(`✅ Broadcasting 'global_stream_data' to ALL clients`);
 
             // Check thresholds and fire alerts + feedback_request backend-side
             await checkAbnormalities(patientUserId, { hr: hrNum, spo2: spo2Num, temp: tempNum, bpSystolic, bpDiastolic }, io);

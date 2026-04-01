@@ -1,86 +1,241 @@
 #include <Wire.h>
-#include "MAX30105.h" // Requires "SparkFun MAX3010x" library
-#include "heartRate.h"
-#include "DHT.h"      // Requires "DHT sensor library" by Adafruit
+#include <NimBLEDevice.h>
+#include <MAX30100_PulseOximeter.h>
+#include <Adafruit_MCP9808.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+// ---------------- PINS ----------------
+#define SDA_PIN 5
+#define SCL_PIN 6
+#define BUZZER_PIN 7
 
-// ---------- SENSOR PINS ----------
-#define DHTPIN 2     // Digital pin connected to the DHT sensor
-#define DHTTYPE DHT11 // DHT 11
-DHT dht(DHTPIN, DHTTYPE);
-MAX30105 pulseOx;
+// ---------------- CUSTOM BLE (MOBILE) ----------------
+#define SERVICE_UUID_CUSTOM "12345678-1234-1234-1234-1234567890ab"
+#define CHAR_UUID_CUSTOM    "abcdefab-1234-5678-1234-abcdefabcdef"
 
-// ---------- ACCURACY / STABILITY ----------
-const byte RATE_SIZE = 20; // 20 readings for smooth HR
-byte rates[RATE_SIZE]; 
-byte rateSpot = 0;
-long lastBeat = 0; 
-float beatsPerMinute;
-int beatAvg;
+// ---------------- STANDARD BLE (PC) ----------------
+#define SERVICE_UUID_STD "180D"
+#define CHAR_UUID_STD    "2A39"
 
-unsigned long lastSend = 0;
-const int sendInterval = 1000;
+// ---------------- OLED ----------------
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_ADDR 0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// ---------------- BLE ----------------
+NimBLECharacteristic* charPc;      // 2A39 → Python
+NimBLECharacteristic* charMobile;  // Custom → Flutter
+bool deviceConnected = false;
+
+// ---------------- Sensors ----------------
+PulseOximeter pox;
+Adafruit_MCP9808 mcp;
+
+// ---------------- Values ----------------
+float heartRate = 0, spo2 = 0, temperature = 0;
+
+// ---------------- Smoothing (EMA) ----------------
+float hrEma = 0, spo2Ema = 0;
+const float EMA_ALPHA = 0.2;
+
+// ---------------- Beat / buzzer ----------------
+uint32_t lastBeat = 0;
+const uint16_t BEEP_MS = 60;
+const uint32_t FINGER_TIMEOUT = 2000;
+bool fingerPresent = false;
+
+// ---------------- UI ----------------
+uint32_t bootTime = 0;
+bool showWelcome = true;
+
+// ---------------- BLE Callbacks ----------------
+class ServerCallbacks : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer*, NimBLEConnInfo&) {
+    deviceConnected = true;
+  }
+  void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) {
+    deviceConnected = false;
+    NimBLEDevice::startAdvertising();
+  }
+};
+
+// ---------------- Beat callback ----------------
+void onBeatDetected() {
+  lastBeat = millis();
+}
+
+// ---------------- EMA helper ----------------
+float emaUpdate(float prev, float current) {
+  if (prev == 0) return current;
+  return EMA_ALPHA * current + (1.0 - EMA_ALPHA) * prev;
+}
 
 void setup() {
-  Serial.begin(9600);
-  Serial.println("Initializing HealthConnect Hardware...");
+  Serial.begin(115200);
 
-  // Initialize MAX30105
-  if (!pulseOx.begin(Wire, I2C_SPEED_STANDARD)) {
-    Serial.println("MAX30105 was not found. Check wiring/power.");
-    while (1);
-  }
-  pulseOx.setup(); // Configure with default settings
-  pulseOx.setPulseAmplitudeRed(0x0A); // Low power for testing
-  pulseOx.setPulseAmplitudeGreen(0);  // Disable green LED
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.setClock(100000);
 
-  dht.begin();
+  display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.display();
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  mcp.begin(0x18);
+  mcp.setResolution(3);
+
+  pox.begin();
+  pox.setOnBeatDetectedCallback(onBeatDetected);
+
+  // ---------------- BLE INIT ----------------
+  NimBLEDevice::init("ESP-Fitness");
+  NimBLEServer* server = NimBLEDevice::createServer();
+  server->setCallbacks(new ServerCallbacks());
+
+  // ---- Standard HR Service (PC) ----
+  NimBLEService* stdService = server->createService(SERVICE_UUID_STD);
+  charPc = stdService->createCharacteristic(
+    CHAR_UUID_STD,
+    NIMBLE_PROPERTY::NOTIFY
+  );
+  stdService->start();
+
+  // ---- Custom Service (Mobile) ----
+  NimBLEService* customService = server->createService(SERVICE_UUID_CUSTOM);
+  charMobile = customService->createCharacteristic(
+    CHAR_UUID_CUSTOM,
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY
+  );
+  customService->start();
+
+  // ---- Advertising ----
+  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+  adv->addServiceUUID(SERVICE_UUID_STD);      // PC
+  adv->addServiceUUID(SERVICE_UUID_CUSTOM);   // Mobile
+
+  NimBLEAdvertisementData scanResp;
+  scanResp.setName("ESP-Fitness");
+  adv->setScanResponseData(scanResp);
+  adv->start();
+
+  bootTime = millis();
 }
 
 void loop() {
-  // 1. Core IR/Red Sensing (Continuous background sampling)
-  long irValue = pulseOx.getIR(); 
+  pox.update();
 
-  // 2. Heart Rate Calculation (Beat detection)
-  if (checkForBeat(irValue) == true) {
-    long delta = millis() - lastBeat;
-    lastBeat = millis();
-    beatsPerMinute = 60 / (delta / 1000.0);
+  bool beatRecent = (millis() - lastBeat < FINGER_TIMEOUT);
 
-    if (beatsPerMinute < 255 && beatsPerMinute > 20) {
-      rates[rateSpot++] = (byte)beatsPerMinute;
-      rateSpot %= RATE_SIZE;
+  static uint32_t lastUpdate = 0;
+  if (millis() - lastUpdate >= 1000) {
+    lastUpdate = millis();
 
-      // Take average of readings
-      beatAvg = 0;
-      for (byte x = 0; x < RATE_SIZE; x++) beatAvg += rates[x];
-      beatAvg /= RATE_SIZE;
+    float hrRaw = pox.getHeartRate();
+    float spo2Raw = pox.getSpO2();
+    temperature = mcp.readTempC();
+
+    if (beatRecent && hrRaw > 40 && hrRaw < 180)
+      hrEma = emaUpdate(hrEma, hrRaw);
+
+    if (beatRecent && spo2Raw > 85 && spo2Raw <= 100)
+      spo2Ema = emaUpdate(spo2Ema, spo2Raw);
+
+    if (beatRecent) {
+      heartRate = hrEma;
+      spo2 = spo2Ema;
+      fingerPresent = true;
+    } else {
+      fingerPresent = false;
+      heartRate = 0;
+      spo2 = 0;
+      hrEma = 0;
+      spo2Ema = 0;
+    }
+
+    if (millis() - bootTime > 2500)
+      showWelcome = false;
+
+    // -------- OLED (UNCHANGED) --------
+    display.clearDisplay();
+
+    if (showWelcome) {
+      display.drawRect(0, 0, 128, 64, SSD1306_WHITE);
+      display.setCursor(42, 14);
+      display.println("WELCOME");
+      display.setCursor(50, 26);
+      display.println("USER");
+      display.drawLine(20, 40, 108, 40, SSD1306_WHITE);
+      display.setCursor(18, 48);
+      display.println("ESP HEALTH :)");
+    } else {
+      display.setCursor(28, 0);
+      display.println("Your Vitals");
+      display.drawLine(26, 10, 96, 10, SSD1306_WHITE);
+
+      if (fingerPresent) {
+        display.setCursor(20, 16);
+        display.print("HR   : ");
+        display.print(heartRate, 1);
+        display.println(" BPM");
+
+        display.setCursor(20, 30);
+        display.print("SpO2 : ");
+        display.print(spo2, 0);
+        display.println(" %");
+      } else {
+        display.setCursor(25, 22);
+        display.println("Place Finger !");
+      }
+
+      display.drawRect(22, 44, 86, 20, SSD1306_WHITE);
+      display.setCursor(30, 50);
+      display.print("Temp: ");
+      display.print(temperature, 1);
+      display.print((char)247);
+      display.print("C");
+    }
+
+    display.display();
+
+    // -------- JSON (WITH NEWLINE) --------
+    char json[128];
+    if (fingerPresent) {
+      snprintf(json, sizeof(json),
+        "{\"hr\":%.1f,\"spo2\":%.1f,\"temp\":%.2f}\n",
+        heartRate, spo2, temperature
+      );
+    } else {
+      // TEST MODE: Send dummy data even when finger not present
+      snprintf(json, sizeof(json),
+        "{\"hr\":72.5,\"spo2\":96.0,\"temp\":%.2f}\n",
+        temperature
+      );
+    }
+
+    // ALWAYS send to USB Serial (for serialBridge on COM3)
+    Serial.println(json);
+
+    // Send to BLE ONLY if connected (optional for mobile/PC BLE clients)
+    if (deviceConnected) {
+      // PC
+      charPc->setValue((uint8_t*)json, strlen(json));
+      charPc->notify();
+
+      // Mobile
+      charMobile->setValue((uint8_t*)json, strlen(json));
+      charMobile->notify();
     }
   }
 
-  // 3. Heart Rate Outlier Filter (Keep it between 40-160 for stability)
-  if (beatAvg < 40) beatAvg = 0; 
-
-  // 4. Send Hardware Data every 1 second
-  if (millis() - lastSend > sendInterval) {
-    lastSend = millis();
-
-    // Read REAL sensors
-    float tempC = dht.readTemperature();
-    int spo2 = 98; // Simulated logic without a full Ox library calculation (needs 100 sample loop)
-    // If you have an SpO2 algorithm, plug it in here.
-    
-    // Check if any reads failed
-    if (isnan(tempC)) tempC = 25.0; 
-
-    // --- EXACT REAL-TIME JSON OUTPUT ---
-    Serial.print("{\"heartRate\":");
-    Serial.print(beatAvg);
-    Serial.print(",\"spo2\":");
-    Serial.print(spo2);
-    Serial.print(",\"temp\":");
-    Serial.print(tempC, 1);
-    Serial.print(",\"timestamp\":");
-    Serial.print(millis());
-    Serial.println("}");
-  }
+  // -------- BUZZER --------
+  if (fingerPresent && (millis() - lastBeat <= BEEP_MS))
+    digitalWrite(BUZZER_PIN, HIGH);
+  else
+    digitalWrite(BUZZER_PIN, LOW);
 }

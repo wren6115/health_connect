@@ -7,6 +7,9 @@ require('dotenv').config();
 const API_URL = 'http://localhost:5000/api/device/device-data';
 const STATUS_URL = 'http://localhost:5000/api/device/status'; // Optional status endpoint
 
+// TEST MODE: Run with: npm run serial-bridge -- --test
+const TEST_MODE = process.argv.includes('--test');
+
 let patientUserId = null;
 let port = null;
 let parser = null;
@@ -32,33 +35,29 @@ const getPatientId = async () => {
     }
 };
 
-// 2. Auto-Detect and Connect Logic
+// 2. Connect to COM3 with correct baud rate
 const connectToDevice = async () => {
     if (isConnecting || port?.isOpen) return;
     isConnecting = true;
 
     try {
+        // Try to list available ports for debugging
         const ports = await SerialPort.list();
         
-        // Scan for common Arduino / ESP chips (CH340, CP2102, FTDI, Silicon Labs, etc)
-        const arduinoPortInfo = ports.find(p => 
-            p.manufacturer?.toLowerCase().includes('arduino') || 
-            p.manufacturer?.toLowerCase().includes('silicon labs') || 
-            p.manufacturer?.toLowerCase().includes('wch') || // CH340
-            p.manufacturer?.toLowerCase().includes('ftdi')
-        );
+        // Check if COM3 is available
+        const com3Port = ports.find(p => p.path === 'COM3');
 
-        if (!arduinoPortInfo) {
-            process.stdout.write('\r⏳ Scanning for IoT devices on USB ports...       ');
+        if (!com3Port) {
+            process.stdout.write('\r⏳ Scanning for IoT device on COM3...       ');
             isConnecting = false;
             setTimeout(connectToDevice, 2000);
             return;
         }
 
-        console.log(`\n🔌 Auto-Detected Device on ${arduinoPortInfo.path} (${arduinoPortInfo.manufacturer})`);
+        console.log(`\n🔌 Connected to COM3 (${com3Port.manufacturer})`);
         
-        // Ensure baud rate matches Arduino: 115200 is modern standard, but 9600 works too. We'll use 9600 to match the provided sketch.
-        port = new SerialPort({ path: arduinoPortInfo.path, baudRate: 9600 });
+        // Baud rate MUST match Arduino code.ino (115200)
+        port = new SerialPort({ path: 'COM3', baudRate: 115200 });
         parser = port.pipe(new ReadlineParser({ delimiter: '\n' }));
 
         port.on('open', () => {
@@ -69,15 +68,18 @@ const connectToDevice = async () => {
         parser.on('data', async (data) => {
             try {
                 const cleanData = data.trim();
-                
+                console.log("🔥 RAW DATA FROM ESP:", data);
                 // Ignore empty lines or non-JSON debug logs
-                if (!cleanData.startsWith('{') || !cleanData.endsWith('}')) return; 
+                if (!cleanData.startsWith('{') || !cleanData.endsWith('}')) {
+                    console.log(`[DEBUG] Non-JSON data received: ${cleanData}`);
+                    return;
+                }
 
                 // 3. Strict JSON Parsing 
                 const vitals = JSON.parse(cleanData);
                 
-                // Use the heartRate key as per the high-accuracy standard
-                const hr = vitals.heartRate || vitals.hr || 0;
+                // Handle null values from Arduino when no finger present
+                const hr = (vitals.hr !== null) ? vitals.hr : 0;
                 const spo2 = vitals.spo2 || 0;
                 const temp = vitals.temp || 0;
 
@@ -126,8 +128,52 @@ const connectToDevice = async () => {
     }
 };
 
+// Test/Simulation Mode (for debugging when Arduino isn't available)
+const simulateData = () => {
+    console.log('\n🧪 TEST MODE: Simulating Arduino data...\n');
+    
+    let hr = 72;
+    let spo2 = 96;
+    let temp = 36.5;
+    
+    const sendTestData = async () => {
+        try {
+            // Simulate realistic vital signs variations
+            hr = Math.max(60, Math.min(100, hr + (Math.random() - 0.5) * 4));
+            spo2 = Math.max(92, Math.min(100, spo2 + (Math.random() - 0.5) * 2));
+            temp = Math.max(36.0, Math.min(37.5, temp + (Math.random() - 0.5) * 0.2));
+
+            const hrFixed = Math.round(hr * 10) / 10;
+            const spo2Fixed = Math.round(spo2 * 10) / 10;
+            const tempFixed = Math.round(temp * 100) / 100;
+
+            console.log(`[${new Date().toLocaleTimeString()}] 📡 [TEST] HR:${hrFixed} | SpO2:${spo2Fixed}% | Temp:${tempFixed}°C`);
+
+            // Send to backend
+            await axios.post(`${API_URL}/${patientUserId}`, {
+                hr: hrFixed,
+                spo2: spo2Fixed,
+                temp: tempFixed,
+                timestamp: Date.now(),
+                source: "test_simulation"
+            });
+        } catch (err) {
+            console.error(`⚠️ Test Data Error: ${err.message}`);
+        }
+    };
+
+    // Send every second
+    setInterval(sendTestData, 1000);
+};
+
 // Startup Sequence
 console.log('=============================================');
 console.log('      HEALTHCONNECT IoT SERIAL BRIDGE        ');
 console.log('=============================================');
-getPatientId().then(() => connectToDevice());
+
+if (TEST_MODE) {
+    console.log('🧪 TEST MODE ENABLED (--test flag detected)');
+    getPatientId().then(() => simulateData());
+} else {
+    getPatientId().then(() => connectToDevice());
+}
