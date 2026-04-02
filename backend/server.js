@@ -30,6 +30,7 @@ const transactionRoutes = require('./routes/transactions');
 const sosRoutes = require('./routes/sos');
 const feedbackRoutes = require('./routes/feedback');
 const reportRoutes = require('./routes/reports');
+const analyticsRoutes = require('./routes/analytics');
 
 // Initialize express app
 const app = express();
@@ -99,6 +100,7 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/sos', sosRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 // --- Backward Compatibility for Frontend MyStats.jsx ---
 // The frontend polls GET /data without auth/patientId. 
@@ -166,6 +168,90 @@ server.listen(PORT, () => {
 
     // Start automatic report generation service
     startReportGenerationService(io);
+
+    // --- 📥 IoT Serial Monitor Integration ---
+    const { SerialPort } = require('serialport');
+    const { ReadlineParser } = require('@serialport/parser-readline');
+    const HealthReading = require('./models/HealthReading');
+    const Patient = require('./models/Patient');
+
+    const initializeSerial = async () => {
+        try {
+            console.log('🔌 Initializing IoT Serial Monitor on COM3 (115200 baud)...');
+            
+            const port = new SerialPort({ 
+                path: 'COM3', 
+                baudRate: 115200,
+                autoOpen: false 
+            });
+
+            const parser = port.pipe(new ReadlineParser({ delimiter: '\n' }));
+
+            port.open((err) => {
+                if (err) {
+                    console.warn(`⚠️ Serial Port Warning: ${err.message}`);
+                    console.log('💡 Note: Server started without hardware. IoT stats will be offline.');
+                    return;
+                }
+                console.log('✅ IoT Serial Monitor Active. Ready for real-time readings.');
+            });
+
+            parser.on('data', async (raw) => {
+                try {
+                    const data = raw.trim();
+                    if (!data || !data.startsWith('{')) return;
+
+                    const json = JSON.parse(data);
+                    const hr = json.hr || 0;
+                    const spo2 = json.spo2 || 0;
+                    const temp = json.temp || 0;
+
+                    // Broadcast to ALL connected clients immediately
+                    const payload = {
+                        ...json,
+                        timestamp: Date.now(),
+                        source: 'hardware'
+                    };
+
+                    io.emit('vitalsUpdate', payload);
+                    io.emit('global_stream_data', payload); // Compatibility
+                    io.emit('live_health_data', payload);   // Compatibility
+
+                    // Save to Database (First Patient as default for hardware)
+                    const p = await Patient.findOne();
+                    if (p) {
+                        const { checkAbnormalities } = require('./services/alertService');
+                        
+                        await HealthReading.create({
+                            patientId: p._id, // Fixed: should be patientId object ref
+                            heartRate: hr,
+                            spo2: spo2,
+                            temperature: temp,
+                            timestamp: new Date(),
+                            source: 'hardware'
+                        });
+
+                        // ✅ CRITICAL: Trigger Alert Logic
+                        await checkAbnormalities(p.userId, { hr, spo2, temp }, io);
+                    }
+
+                } catch (err) {
+                    // Silent fail for malformed serial data (common on startup)
+                }
+            });
+
+            port.on('error', (err) => console.error('⚠️ Serial Error:', err.message));
+            port.on('close', () => {
+                console.log('🔌 Serial Connection Closed. Retrying in 5s...');
+                setTimeout(initializeSerial, 5000);
+            });
+
+        } catch (err) {
+            console.error('❌ Serial Initialization Failed:', err.message);
+        }
+    };
+
+    initializeSerial();
 });
 
 module.exports = { app, server };

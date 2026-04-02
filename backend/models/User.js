@@ -25,6 +25,11 @@ const userSchema = new mongoose.Schema({
     phone: {
         type: String,
         required: true
+    },
+    status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending' // Admin accounts can just be approved manually or via logic
     }
 }, { timestamps: true });
 

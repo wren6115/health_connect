@@ -2,13 +2,13 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 
+// Public pages
 import Home from './components/Home';
 import Contact from './components/Contact';
 import Login from './components/Login';
 import Register from './components/Register';
-import PatientDashboard from './components/PatientDashboard';
-import DoctorDashboard from './components/DoctorDashboard';
-import AdminDashboard from './components/AdminDashboard';
+
+// Feature pages (preserved)
 import Appointment from './components/Appointment';
 import VideoCall from './components/VideoCall';
 import MyStats from './components/MyStats';
@@ -16,15 +16,45 @@ import Notifications from './components/Notifications';
 import PrivateRoute from './components/PrivateRoute';
 import Navbar from './components/Navbar';
 
+// Layouts
+import AdminLayout from './components/layouts/AdminLayout';
+import DoctorLayout from './components/layouts/DoctorLayout';
+import PatientLayout from './components/layouts/PatientLayout';
+
+// Admin pages
+import AdminDashboard from './components/AdminDashboard';
+import AdminPatients from './components/admin/AdminPatients';
+import AdminPatientDetail from './components/admin/AdminPatientDetail';
+import AdminDoctors from './components/admin/AdminDoctors';
+import AdminDoctorDetail from './components/admin/AdminDoctorDetail';
+import AdminAnalytics from './components/admin/AdminAnalytics';
+import AdminReports from './components/admin/AdminReports';
+import AdminAlerts from './components/admin/AdminAlerts';
+import AdminSettings from './components/admin/AdminSettings';
+
+// Doctor pages
+import DoctorDashboard from './components/DoctorDashboard';
+import DoctorPatients from './components/doctor/DoctorPatients';
+import DoctorPatientDetail from './components/doctor/DoctorPatientDetail';
+import DoctorAppointments from './components/doctor/DoctorAppointments';
+import DoctorReports from './components/doctor/DoctorReports';
+import DoctorAlerts from './components/doctor/DoctorAlerts';
+import DoctorProfile from './components/doctor/DoctorProfile';
+
+// Patient pages
+import PatientDashboard from './components/PatientDashboard';
+import PatientReports from './components/patient/PatientReports';
+import PatientHistory from './components/patient/PatientHistory';
+import PatientAlerts from './components/patient/PatientAlerts';
+import PatientDoctor from './components/patient/PatientDoctor';
+
 import './App.css';
 
 // Layout with Navbar + Footer for public-facing pages
 const PublicLayout = ({ children }) => (
   <div className="flex flex-col min-h-screen">
     <Navbar />
-    <main className="flex-grow">
-      {children}
-    </main>
+    <main className="flex-grow">{children}</main>
     <footer className="bg-gray-900 text-white pt-10 pb-6 mt-auto">
       <div className="max-w-6xl mx-auto px-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
@@ -69,54 +99,80 @@ function App() {
     <Router>
       <AuthProvider>
         <Routes>
-          {/* Public routes with Navbar + Footer */}
+          {/* ── Public routes ── */}
           <Route path="/" element={<PublicLayout><Home /></PublicLayout>} />
           <Route path="/contact" element={<PublicLayout><Contact /></PublicLayout>} />
 
-          {/* Auth routes - no layout */}
+          {/* ── Auth routes ── */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
 
-          {/* Role-specific dashboards - NO PublicLayout (they have their own nav) */}
-          <Route path="/patient-dashboard" element={
-            <PrivateRoute allowedRoles={['patient']}>
-              <PatientDashboard />
-            </PrivateRoute>
-          } />
-          <Route path="/doctor-dashboard" element={
-            <PrivateRoute allowedRoles={['doctor']}>
-              <DoctorDashboard />
-            </PrivateRoute>
-          } />
-          <Route path="/admin-dashboard" element={
+          {/* ── Feature routes (preserved) ── */}
+          <Route path="/appointment" element={<PrivateRoute allowedRoles={['patient','admin','doctor']}><Appointment /></PrivateRoute>} />
+          <Route path="/videocall" element={<PrivateRoute><VideoCall /></PrivateRoute>} />
+          <Route path="/mystats" element={<PrivateRoute allowedRoles={['patient']}><MyStats /></PrivateRoute>} />
+          <Route path="/notifications" element={<PrivateRoute><Notifications /></PrivateRoute>} />
+
+          {/* ── Legacy redirects (backward compat) ── */}
+          <Route path="/admin-dashboard" element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="/doctor-dashboard" element={<Navigate to="/doctor/dashboard" replace />} />
+          <Route path="/patient-dashboard" element={<Navigate to="/patient/dashboard" replace />} />
+
+          {/* ══════════════════════════════════════════ */}
+          {/* ── ADMIN routes (nested under /admin) ── */}
+          {/* ══════════════════════════════════════════ */}
+          <Route path="/admin" element={
             <PrivateRoute allowedRoles={['admin']}>
-              <AdminDashboard />
+              <AdminLayout />
             </PrivateRoute>
-          } />
+          }>
+            <Route index element={<Navigate to="/admin/dashboard" replace />} />
+            <Route path="dashboard" element={<AdminDashboard />} />
+            <Route path="patients" element={<AdminPatients />} />
+            <Route path="patients/:id" element={<AdminPatientDetail />} />
+            <Route path="doctors" element={<AdminDoctors />} />
+            <Route path="doctors/:id" element={<AdminDoctorDetail />} />
+            <Route path="analytics" element={<AdminAnalytics />} />
+            <Route path="reports" element={<AdminReports />} />
+            <Route path="alerts" element={<AdminAlerts />} />
+            <Route path="settings" element={<AdminSettings />} />
+          </Route>
 
-          {/* Feature routes - NO PublicLayout (Appointment has its own header) */}
-          <Route path="/appointment" element={
-            <PrivateRoute allowedRoles={['patient', 'admin']}>
-              <Appointment />
+          {/* ══════════════════════════════════════════ */}
+          {/* ── DOCTOR routes (nested under /doctor) ── */}
+          {/* ══════════════════════════════════════════ */}
+          <Route path="/doctor" element={
+            <PrivateRoute allowedRoles={['doctor']}>
+              <DoctorLayout />
             </PrivateRoute>
-          } />
-          <Route path="/videocall" element={
-            <PrivateRoute>
-              <VideoCall />
-            </PrivateRoute>
-          } />
-          <Route path="/mystats" element={
+          }>
+            <Route index element={<Navigate to="/doctor/dashboard" replace />} />
+            <Route path="dashboard" element={<DoctorDashboard />} />
+            <Route path="patients" element={<DoctorPatients />} />
+            <Route path="patients/:id" element={<DoctorPatientDetail />} />
+            <Route path="appointments" element={<DoctorAppointments />} />
+            <Route path="reports" element={<DoctorReports />} />
+            <Route path="alerts" element={<DoctorAlerts />} />
+            <Route path="profile" element={<DoctorProfile />} />
+          </Route>
+
+          {/* ══════════════════════════════════════════ */}
+          {/* ── PATIENT routes (nested under /patient) ── */}
+          {/* ══════════════════════════════════════════ */}
+          <Route path="/patient" element={
             <PrivateRoute allowedRoles={['patient']}>
-              <MyStats />
+              <PatientLayout />
             </PrivateRoute>
-          } />
-          <Route path="/notifications" element={
-            <PrivateRoute>
-              <Notifications />
-            </PrivateRoute>
-          } />
+          }>
+            <Route index element={<Navigate to="/patient/dashboard" replace />} />
+            <Route path="dashboard" element={<PatientDashboard />} />
+            <Route path="reports" element={<PatientReports />} />
+            <Route path="history" element={<PatientHistory />} />
+            <Route path="alerts" element={<PatientAlerts />} />
+            <Route path="doctor" element={<PatientDoctor />} />
+          </Route>
 
-          {/* Catch all */}
+          {/* ── Catch all ── */}
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </AuthProvider>

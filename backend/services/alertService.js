@@ -163,15 +163,17 @@ const checkAbnormalities = async (patientUserId, data, io) => {
             if (latestAlert.status === 'WAITING_FOR_RESPONSE') return;
             if (latestAlert.status === 'ESCALATED') {
                 const timeSinceEscalated = Date.now() - new Date(latestAlert.timestamp).getTime();
-                if (timeSinceEscalated < 5 * 60 * 1000) return; // Wait 5 mins before generating a completely new event if already escalated
+                // [FIX for Instant Alerting] Disabled 5-min cooldown to ensure rapid alerting works during simulation or hardware testing.
+                // if (timeSinceEscalated < 5 * 60 * 1000) return; 
             }
             
             // Rule 2: Cooldown. If they just said "YES I AM OK", mask alarms for 2 minutes to let their vitals stabilize.
             if (latestAlert.status === 'RESOLVED') {
                 const timeSinceResolved = Date.now() - new Date(latestAlert.timestamp).getTime();
-                if (timeSinceResolved < 2 * 60 * 1000) {
-                    return; 
-                }
+                // [FIX for Instant Alerting] Disabled 2-min cooldown.
+                // if (timeSinceResolved < 2 * 60 * 1000) {
+                //     return; 
+                // }
             }
         }
 

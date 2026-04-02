@@ -117,6 +117,14 @@ exports.loginUser = async (req, res) => {
                 return res.status(401).json({ message: 'Invalid role for this account' });
             }
 
+            // 🚫 Block pending or rejected users
+            if (user.status === 'pending') {
+                return res.status(403).json({ message: 'Your account is pending Admin approval. Please wait.' });
+            }
+            if (user.status === 'rejected') {
+                return res.status(403).json({ message: 'Your account access has been rejected.' });
+            }
+
             let extraDetails = {};
             if (user.role === 'patient') {
                 extraDetails = await Patient.findOne({ userId: user._id });
